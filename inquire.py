@@ -1,10 +1,11 @@
-#!/usr/bin/env python3
 import openai
-import sys
 import os
 import platform
+import sys
+from colorama import Fore, init
 
 openai.api_key = os.environ.get('OPENAI_API_KEY')
+init(autoreset=True)
 
 def clear_screen():
     if platform.system() == 'Windows':
@@ -30,34 +31,29 @@ def display_system_prompts(prompts):
     choice = int(input("\nEnter your choice (number): "))
     return prompts[choice - 1]
 
-def ask_gpt(prompt):
-    r = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": prompt},
-            {"role": "user", "content": prompt}
-        ]
-    )
-    text = r["choices"][0]["message"]["content"]
-    if text.startswith('`') and text.endswith('`'):
-        text = text[1:-1]
-    return text
+def estimate_tokens(conversation):
+    return sum(len(message["content"].split()) + sum(c in ',.?!:;' for c in message["content"]) for message in conversation)
 
-def stream_gpt(prompt):
+def stream_gpt(prompt, conversation):
+    conversation.append({"role": "user", "content": prompt})
+    token_count = estimate_tokens(conversation)
+    print(f"{Fore.RED}Tokens used: {token_count}/4096\n")
+
+    if token_count >= 4090:
+        print(f"{Fore.YELLOW}Warning: Approaching token limit. The conversation may end soon.\n")
+
     r = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": prompt},
-            {"role": "user", "content": prompt}
-        ],
-        stream=True
+        messages=conversation
     )
-    print()
-    for chunk in r:
-        content = chunk.get("choices", [{}])[0].get("delta", {}).get("content")
-        if content:
-            print(content, end="")
-    print("\n")
+
+    response_text = r["choices"][0]["message"]["content"]
+    conversation.append({"role": "assistant", "content": response_text})
+    token_count = estimate_tokens(conversation)
+    print(response_text)
+    print(f"{Fore.RED}Tokens used after response: {token_count}/4096\n")
+
+    return conversation
 
 system_prompts = [
     "You are ChatGPT, a large language model trained by OpenAI. Answer as concisely as possible.",
@@ -67,18 +63,22 @@ system_prompts = [
 if len(sys.argv) < 2:
     clear_screen()
     selected_prompt = choose_prompt(system_prompts)
-    while True:  # Keep the interaction going in a loop
-        prompt = input("\033[32mHow can I help:\033[0m ")
+    conversation = [{"role": "system", "content": selected_prompt}]
+    print(f"{Fore.BLUE}Type 'exit' to quit conversation.{Fore.RESET}")
+
+    continuation_prompt = "How can I help:"
+    continuation_prompt_color = Fore.GREEN  # Always green for both prompts
+
+    while True:
+        prompt = input(f"{continuation_prompt_color}{continuation_prompt}{Fore.YELLOW} ")  # User text color is Fore.MAGENTA
         if prompt.lower() in ['exit', 'quit']:
             break
-        if prompt.lower() == 'np':
-            selected_prompt = choose_prompt(system_prompts)
-            clear_screen()
-            continue
-        response = stream_gpt(prompt)  # or use selected_prompt if needed
-        input("[continue...]")
-        clear_screen()
+
+        conversation = stream_gpt(prompt, conversation)
+        continuation_prompt = "What else do you need?"
+
 else:
     prompt = ' '.join(sys.argv[1:])
-    response = ask_gpt(prompt)
+    conversation = [{"role": "system", "content": prompt}, {"role": "user", "content": prompt}]
+    response = stream_gpt(prompt, conversation)
     print("\n" + response + "\n")
